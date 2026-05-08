@@ -11,6 +11,9 @@ RUN adduser -D -g 'appuser' appuser
 RUN mkdir -p /run/app/logs && chown -R appuser:appuser /run/app
 RUN mkdir -p /etc/cassandra-admin && chown -R appuser:appuser /etc/cassandra-admin
 
+COPY --chown=appuser:appuser ./src /app
+COPY --chown=appuser:appuser ./lib /lualib
+
 USER appuser
 
 CMD ["/bin/sh", "-c", "/app/_docker_entrypoint.lua > /run/app/nginx.conf && exec nginx -p /run/app -c /run/app/nginx.conf"]
