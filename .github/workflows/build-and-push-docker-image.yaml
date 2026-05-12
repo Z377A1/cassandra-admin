@@ -5,6 +5,19 @@ on:
   schedule:
     # Runs every Sunday at 00:00 UTC
     - cron: "0 0 * * 0"
+  push:
+    branches:
+      - main
+    paths:
+      - Dockerfile
+      - docker/**
+      - lua/**
+      - static/**
+      - views/**
+      - nginx.conf
+      - docker-compose*.yml
+      - docker-compose*.yaml
+      - .github/workflows/build-and-push-docker-image.yaml
 
 permissions:
   contents: read
@@ -17,6 +30,7 @@ env:
 jobs:
   docker:
     runs-on: ubuntu-latest
+    if: github.event_name != 'push' || !contains(github.event.head_commit.message, '[skip docker]')
 
     permissions:
       contents: read
