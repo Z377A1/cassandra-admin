@@ -16,11 +16,19 @@
 	"customizations": {
 		"vscode": {
 			"extensions": [
+				"ms-vscode.vscode-chat-customizations-evaluations",
 				"anthropic.claude-code",
 				"openai.chatgpt",
+				"google.google-antigravity",
 				"github.vscode-github-actions",
+				"ms-azuretools.vscode-containers",
+				"ms-azuretools.vscode-docker",
+				"docker.docker",
+				"esbenp.prettier-vscode",
 				"ms-vscode.makefile-tools",
 				"gruntfuggly.todo-tree",
+				"redhat.vscode-xml",
+				"redhat.vscode-yaml",
 				"sumneko.lua"
 			]
 		}
