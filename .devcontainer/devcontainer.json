@@ -6,7 +6,10 @@
 	"image": "mcr.microsoft.com/devcontainers/base:noble",
 	// Features to add to the dev container. More info: https://containers.dev/features.
 	"features": {
-		"ghcr.io/devcontainers/features/docker-outside-of-docker:1": {}
+		"ghcr.io/devcontainers/features/docker-in-docker:4": {
+			"moby": false,
+			"installDockerComposeSwitch": true
+		}
 	},
 	// Use 'forwardPorts' to make a list of ports inside the container available locally.
 	// "forwardPorts": [],
@@ -29,7 +32,8 @@
 				"gruntfuggly.todo-tree",
 				"redhat.vscode-xml",
 				"redhat.vscode-yaml",
-				"sumneko.lua"
+				"sumneko.lua",
+				"ahmadalli.vscode-nginx-conf"
 			]
 		}
 	}

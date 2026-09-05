@@ -1,3 +1,9 @@
+networks:
+  cassandra_network:
+
+volumes:
+  cassandra-data:
+
 services:
   cassandra:
     image: cassandra:5
@@ -5,22 +11,54 @@ services:
     hostname: cassandra
     restart: unless-stopped
     environment:
-      - CASSANDRA_CLUSTER_NAME=TestCluster
+      - CASSANDRA_CLUSTER_NAME=CassandraAdminCluster
       - CASSANDRA_DC=datacenter1
       - CASSANDRA_RACK=rack1
       - CASSANDRA_ENDPOINT_SNITCH=GossipingPropertyFileSnitch
-      - MAX_HEAP_SIZE=512M
-      - HEAP_NEWSIZE=100M
+      - MAX_HEAP_SIZE=796M
+      - HEAP_NEWSIZE=256M
+    networks:
+      - cassandra_network
+    volumes:
+      - cassandra-data:/var/lib/cassandra
+
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "/bin/sh",
+          "-c",
+          "/opt/cassandra/bin/nodetool status > /dev/null 2>&1 || exit 1",
+        ]
+      interval: 30s
+      timeout: 30s
+      retries: 20
+      start_period: 90s
+    deploy:
+      resources:
+        limits:
+          cpus: 2
+          memory: 1.5G
 
   cassandra-admin:
     build:
       context: .
     container_name: cassandra_admin
-    restart: unless-stopped
+    restart: "no"
     environment:
       - CA_CONNECTION_HOST=cassandra_db
       - CA_CONNECTION_USERNAME=cassandra
       - CA_CONNECTION_PASSWORD=cassandra
     ports:
-      - "8002:80"
+      - "8000:80"
+    networks:
+      - cassandra_network
     init: true
+    depends_on:
+      cassandra:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: 1
+          memory: 512M

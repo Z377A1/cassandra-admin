@@ -1,5 +1,4 @@
 {% layout="layout.html" %}
-<div x-data="main()">
 <div x-data="main({{ config.default_page_size }})">
     {(components/toast.html)}
 
@@ -275,7 +274,6 @@
 </div>
 
 <script>
-function main() {
 function main(defaultPageSize = 50) {
   return {
     schema: [],
@@ -305,7 +303,6 @@ function main(defaultPageSize = 50) {
     loading: true,
     entityLoading: false,
     modalData: { keyspace: null, entity: null, entityType: null },
-    pageSize: {{ config.default_page_size }},
     pageSize: defaultPageSize,
     schemaError: null,
     format: 'cql',

@@ -1,7 +1,7 @@
 FROM openresty/openresty:alpine
 WORKDIR /app
 
-RUN apk update && apk add luarocks5.1 dos2unix && ln -sf /usr/bin/luarocks-5.1 /usr/bin/luarocks
+RUN apk update && apk add luarocks5.1 && ln -sf /usr/bin/luarocks-5.1 /usr/bin/luarocks
 RUN luarocks install lua-resty-template \
     && luarocks install lua-resty-reqargs \
     && luarocks install inspect
@@ -13,8 +13,6 @@ RUN mkdir -p /etc/cassandra-admin && chown -R appuser:appuser /etc/cassandra-adm
 
 COPY --chown=appuser:appuser ./src /app
 COPY --chown=appuser:appuser ./lib /lualib
-
-RUN dos2unix /app/_docker_entrypoint.lua && chmod +x /app/_docker_entrypoint.lua
 
 USER appuser
 
