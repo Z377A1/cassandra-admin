@@ -121,13 +121,13 @@ local function get_peer(self, host, status)
 end
 
 local function set_peers(self, topo_version, peers, protocol_version)
-  local marshalled = {}
+  local hosts = {}
 
   for i = 1, #peers do
-    marshalled[i] = peers[i].host
+    hosts[i] = peers[i].host
   end
 
-  marshalled = concat(marshalled, ",")
+  local marshalled = concat(hosts, ",")
 
   if protocol_version then
     marshalled = protocol_version .. "|" .. marshalled
