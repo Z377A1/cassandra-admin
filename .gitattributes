@@ -1,0 +1,13 @@
+# Default line ending handling (auto normalize to LF in repo)
+* text=auto
+
+# Explicitly force LF on checkout and commit for scripts and configs
+*.lua text eol=lf
+*.sh text eol=lf
+*.conf text eol=lf
+Dockerfile text eol=lf
+
+# Keep Windows-specific files on CRLF if present
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
