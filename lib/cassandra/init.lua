@@ -658,6 +658,7 @@ end
 -- @table type_serializers
 
 for cql_t_name, cql_t in pairs(cql.types) do
+  ---@diagnostic disable-next-line: assign-type-mismatch
   _Host[cql_t_name] = function(val)
     if val == nil then
       error('bad argument #1 to \''..cql_t_name..'()\' (got nil)', 2)
