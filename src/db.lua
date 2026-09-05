@@ -19,58 +19,85 @@ local function handle_error(err)
         message = error_msg
     }))
     ngx.exit(ngx.HTTP_INTERNAL_SERVER_ERROR)
+    error(error_msg)
 end
 
 local function connect()
-    local peer = cassandra.new({
+    local peer, err = cassandra.new({
         host = config.connection.host,
         port = utils.coerce_positive_integer(config.connection.port, 9042),
         auth = cassandra.auth_providers[config.connection.auth_provider](config.connection.username, config.connection.password),
     })
+    if not peer then
+        handle_error(err or "Failed to initialize Cassandra client")
+        return nil
+    end
     peer:settimeout(config.connection.timeout)
-    local ok, err = peer:connect()
+    local ok, conn_err = peer:connect()
     if not ok then
-        handle_error(err)
+        handle_error(conn_err)
+        return nil
     end
     return peer
 end
 
 local function execute(query, params, options)
     local peer = connect()
-
     if not peer then
         handle_error("No database connection")
+        return nil
     end
     local result, err = peer:execute(query, params, options)
     if not result then
         handle_error(err)
+        return nil
     end
     return result
 end
+
+---@class CassandraKeyspaceRow
+---@field keyspace_name string
+
+---@class CassandraTableRow
+---@field keyspace_name string
+---@field table_name string
+---@field comment? string
+
+---@class CassandraViewRow
+---@field keyspace_name string
+---@field view_name string
+---@field comment? string
 
 function _M.getSchema()
     local peer = connect()
     if not peer then
         handle_error("No database connection")
+        return nil
     end
     
     local keyspaces_query = "SELECT keyspace_name FROM system_schema.keyspaces;"
     local keyspaces = peer:execute(keyspaces_query)
     if not keyspaces then
         handle_error("Failed to fetch keyspaces")
+        return nil
     end
+    ---@cast keyspaces CassandraKeyspaceRow[]
 
     local tables_query = "SELECT * FROM system_schema.tables;"
     local tables = peer:execute(tables_query)
     if not tables then
         handle_error("Failed to fetch tables")
+        return nil
     end
+    ---@cast tables CassandraTableRow[]
 
     local views_query = "SELECT * FROM system_schema.views;"
     local views = peer:execute(views_query)
     if not views then
         handle_error("Failed to fetch views")
+        return nil
     end
+    ---@cast views CassandraViewRow[]
 
     local keyspace_entities = {}
     for _, tbl in ipairs(tables) do
@@ -208,13 +235,16 @@ function _M.getTableDDL(keyspace, table_name)
     ]], keyspace, table_name)
 
     local table_info = execute(table_info_query)
-    if #table_info == 0 then
+    if not table_info or #table_info == 0 then
         return nil, "Table does not exist"
     end
     
     local tbl = table_info[1]
     
     local columns = getTableColumns(keyspace, table_name)
+    if not columns then
+        return nil, "Failed to fetch columns"
+    end
     
     local cql = {}
     table.insert(cql, string.format("CREATE TABLE IF NOT EXISTS %s.%s (", keyspace, table_name))
@@ -249,7 +279,7 @@ function _M.getTableDDL(keyspace, table_name)
     table.insert(cql, ")")
 
     local column_type_map = {}
-    if table_info.columns and type(table_info.columns) == "table" then
+    if table_info and table_info.columns and type(table_info.columns) == "table" then
         for _, col_meta in ipairs(table_info.columns) do
             if col_meta and col_meta.name then
                 column_type_map[col_meta.name] = col_meta.type
@@ -312,8 +342,16 @@ function _M.exportTableData(keyspace, table_name, format, limit, include_ddl)
     end
 
     local limit = utils.coerce_positive_integer(limit, 100)
-    local columns = getTableColumns(keyspace, table_name)
+    local columns, col_err = getTableColumns(keyspace, table_name)
+    if not columns then
+        return nil, col_err or "Failed to fetch columns"
+    end
+
     local result = execute(string.format("SELECT * FROM %s.%s LIMIT %d", keyspace, table_name, limit))
+    if not result then
+        return nil, "Failed to fetch table data"
+    end
+
     local formatted_rows = formatting.format_rows(result)
 
     if format == "json" then
@@ -332,7 +370,7 @@ function _M.exportTableData(keyspace, table_name, format, limit, include_ddl)
         end
         
         local column_type_map = {}
-        if result.columns and type(result.columns) == "table" then
+        if result and result.columns and type(result.columns) == "table" then
             for _, col_meta in ipairs(result.columns) do
                 if col_meta and col_meta.name then
                     column_type_map[col_meta.name] = col_meta.type
