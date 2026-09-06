@@ -126,14 +126,6 @@ This list is not exhaustive, but outlines current architectural limitations:
 - **Read-only data manipulation** — Editing, inserting, or modifying individual rows in the UI is not yet supported.
 - **No data import** — Importing data from CQL, CSV, or JSON files is planned for a future release.
 
-## Roadmap
-
-- [ ] Datatable with client-side sorting and search
-- [ ] Testbed against Cassandra-compatible databases (e.g., ScyllaDB) and various Cassandra versions (3.x, 4.x, 5.x)
-- [ ] UI for creating keyspaces, tables, and indexes
-- [ ] Direct CQL query editor/console
-- [ ] Multi-node cluster topology awareness
-
 ## Credits
 
 This project makes use of the following open-source libraries:
