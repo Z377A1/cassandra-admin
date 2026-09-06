@@ -121,6 +121,8 @@ function _M.format(value, type_info)
         return tostring(value)
     end
     
+    local cql_type = type_info.__cql_type
+    
     if cql_type == cql_types.custom then
         if type(value) == "table" then
             return format_vector(value)
@@ -286,7 +288,7 @@ function _M.format_cql_insert(keyspace, table_name, row, columns, column_type_ma
         local val = row[col.column_name]
         
         if val ~= nil and val ~= "" then
-            table.insert(col_names, col.column_name)
+            table.insert(col_names, string.format('"%s"', tostring(col.column_name):gsub('"', '""')))
             
             local type_info = column_type_map and column_type_map[col.column_name]
             table.insert(values, _M.format_cql_value(val, type_info))
@@ -298,9 +300,9 @@ function _M.format_cql_insert(keyspace, table_name, row, columns, column_type_ma
     end
     
     return string.format(
-        "INSERT INTO %s.%s (%s) VALUES (%s);",
-        keyspace,
-        table_name,
+        'INSERT INTO "%s"."%s" (%s) VALUES (%s);',
+        tostring(keyspace):gsub('"', '""'),
+        tostring(table_name):gsub('"', '""'),
         table.concat(col_names, ", "),
         table.concat(values, ", ")
     )

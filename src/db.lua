@@ -25,6 +25,11 @@ local function handle_error(err)
     error(error_msg)
 end
 
+local function quote_ident(ident)
+    if not ident then return '""' end
+    return '"' .. tostring(ident):gsub('"', '""') .. '"'
+end
+
 local function connect()
     local peer, err = cassandra.new({
         host = config.connection.host,
@@ -71,6 +76,42 @@ end
 ---@field view_name string
 ---@field comment? string
 
+---@class CassandraColumnMetadata
+---@field column_name string
+---@field type string
+---@field kind string
+---@field clustering_order string
+---@field position number
+---@field is_vector? boolean
+---@field dimension? number
+---@field is_masked? boolean
+---@field mask_function? string
+---@field mask_args? any
+---@field has_index? boolean
+---@field index_name? string
+---@field is_sai? boolean
+---@field is_vector_index? boolean
+---@field similarity_function? string
+
+---@class CassandraColumnMaskRow
+---@field column_name string
+---@field function_name string
+---@field function_argument_values any[]
+
+---@class CassandraIndexOptions
+---@field target? string
+---@field class_name? string
+---@field similarity_function? string
+---@field [string] any
+
+---@class CassandraIndexRow
+---@field index_name string
+---@field kind string
+---@field target? string
+---@field is_sai? boolean
+---@field similarity_function? string
+---@field options? CassandraIndexOptions|table
+
 function _M.getSchema()
     local peer = connect()
     if not peer then
@@ -112,12 +153,14 @@ function _M.getSchema()
     pcall(function()
         local vks_res = peer:execute("SELECT keyspace_name FROM system_virtual_schema.keyspaces;")
         if vks_res and #vks_res > 0 then
+            ---@cast vks_res CassandraKeyspaceRow[]
             for _, vks in ipairs(vks_res) do
                 table.insert(keyspaces, vks)
             end
         end
         local vtbl_res = peer:execute("SELECT * FROM system_virtual_schema.tables;")
         if vtbl_res and #vtbl_res > 0 then
+            ---@cast vtbl_res CassandraTableRow[]
             for _, vtbl in ipairs(vtbl_res) do
                 if not keyspace_entities[vtbl.keyspace_name] then
                     keyspace_entities[vtbl.keyspace_name] = {}
@@ -159,6 +202,7 @@ function _M.getSchema()
     return schema
 end
 
+---@return CassandraColumnMetadata[]|nil, string|nil
 local function getTableColumns(keyspace, table_name)
     local query = string.format([[
         SELECT column_name, type, kind, clustering_order, position
@@ -190,6 +234,7 @@ local function getTableColumns(keyspace, table_name)
         ]], keyspace, table_name)
         local mask_res = execute(mask_query)
         if mask_res and #mask_res > 0 then
+            ---@cast mask_res CassandraColumnMaskRow[]
             for _, m in ipairs(mask_res) do
                 masks_by_col[m.column_name] = {
                     function_name = m.function_name,
@@ -199,6 +244,7 @@ local function getTableColumns(keyspace, table_name)
         end
     end)
 
+    ---@cast result CassandraColumnMetadata[]
     -- Detect vector columns and masks
     for _, col in ipairs(result) do
         if col.type then
@@ -219,6 +265,7 @@ local function getTableColumns(keyspace, table_name)
     return columns
 end
 
+---@return CassandraIndexRow[]
 local function getTableIndexes(keyspace, table_name)
     local indexes = {}
     pcall(function()
@@ -229,6 +276,7 @@ local function getTableIndexes(keyspace, table_name)
         ]], keyspace, table_name)
         local result = execute(query)
         if result and #result > 0 then
+            ---@cast result CassandraIndexRow[]
             for _, idx in ipairs(result) do
                 local is_sai = false
                 local target = nil
@@ -308,7 +356,7 @@ function _M.getTableData(keyspace, table_name, page_size, paging_state_encoded)
         end
     end
 
-    local query = string.format("SELECT * FROM %s.%s", keyspace, table_name)
+    local query = string.format("SELECT * FROM %s.%s", quote_ident(keyspace), quote_ident(table_name))
     local result = execute(query, nil, query_options)
     
     local has_more_pages = false
@@ -377,18 +425,18 @@ function _M.vectorSearch(keyspace, table_name, vector_column, query_vector, limi
 
     local col_names = {}
     for _, c in ipairs(columns) do
-        table.insert(col_names, c.column_name)
+        table.insert(col_names, quote_ident(c.column_name))
     end
     local select_cols = table.concat(col_names, ", ")
     local query = string.format(
         "SELECT %s, %s(%s, %s) AS similarity_score FROM %s.%s ORDER BY %s ANN OF %s LIMIT %d",
         select_cols,
         sim_fn,
-        vector_column,
+        quote_ident(vector_column),
         vec_str,
-        keyspace,
-        table_name,
-        vector_column,
+        quote_ident(keyspace),
+        quote_ident(table_name),
+        quote_ident(vector_column),
         vec_str,
         limit
     )
@@ -432,7 +480,7 @@ function _M.truncateTable(keyspace, table_name)
         return nil, "System keyspaces are not user-modifiable."
     end
 
-    local query = string.format("TRUNCATE %s.%s", keyspace, table_name)
+    local query = string.format("TRUNCATE %s.%s", quote_ident(keyspace), quote_ident(table_name))
     local result = execute(query)
     
     return true
@@ -448,7 +496,7 @@ function _M.dropEntity(entity_type, keyspace, table_name)
         view = "MATERIALIZED VIEW"
     }
     
-    local result = execute(string.format("DROP %s %s.%s", entity_types[entity_type], keyspace, table_name))
+    local result = execute(string.format("DROP %s %s.%s", entity_types[entity_type], quote_ident(keyspace), quote_ident(table_name)))
 
     return true
 end
@@ -458,7 +506,7 @@ function _M.dropKeyspace(keyspace)
         return nil, "System keyspaces are not user-modifiable."
     end
 
-    local result = execute(string.format("DROP KEYSPACE %s", keyspace))
+    local result = execute(string.format("DROP KEYSPACE %s", quote_ident(keyspace)))
 
     return true
 end
@@ -482,14 +530,14 @@ function _M.getTableDDL(keyspace, table_name)
     end
     
     local cql = {}
-    table.insert(cql, string.format("CREATE TABLE IF NOT EXISTS %s.%s (", keyspace, table_name))
+    table.insert(cql, string.format("CREATE TABLE IF NOT EXISTS %s.%s (", quote_ident(keyspace), quote_ident(table_name)))
     
     local col_defs = {}
     local partition_keys = {}
     local clustering_keys = {}
     
     for _, col in ipairs(columns) do
-        local col_def = string.format("    %s %s", col.column_name, col.type)
+        local col_def = string.format("    %s %s", quote_ident(col.column_name), col.type)
         if col.is_masked and col.mask_function then
             local args_str = ""
             if col.mask_args and #col.mask_args > 0 then
@@ -499,9 +547,9 @@ function _M.getTableDDL(keyspace, table_name)
         end
         table.insert(col_defs, col_def)
         if col.kind == "partition_key" then
-            table.insert(partition_keys, col.column_name)
+            table.insert(partition_keys, quote_ident(col.column_name))
         elseif col.kind == "clustering" then
-            table.insert(clustering_keys, col.column_name)
+            table.insert(clustering_keys, quote_ident(col.column_name))
         end
     end
     
@@ -536,7 +584,7 @@ function _M.getTableDDL(keyspace, table_name)
         local orders = {}
         for _, col in ipairs(columns) do
             if col.kind == "clustering" then
-                table.insert(orders, string.format("%s %s", col.column_name, col.clustering_order:upper()))
+                table.insert(orders, string.format("%s %s", quote_ident(col.column_name), col.clustering_order:upper()))
             end
         end
         if #orders > 0 then
@@ -592,12 +640,12 @@ function _M.getTableDDL(keyspace, table_name)
                 end
                 table.insert(cql, string.format(
                     "CREATE CUSTOM INDEX IF NOT EXISTS %s ON %s.%s (%s) USING 'StorageAttachedIndex'%s;",
-                    idx.index_name, keyspace, table_name, idx.target or "", opts_clause
+                    quote_ident(idx.index_name), quote_ident(keyspace), quote_ident(table_name), quote_ident(idx.target or ""), opts_clause
                 ))
             else
                 table.insert(cql, string.format(
                     "CREATE INDEX IF NOT EXISTS %s ON %s.%s (%s);",
-                    idx.index_name, keyspace, table_name, idx.target or ""
+                    quote_ident(idx.index_name), quote_ident(keyspace), quote_ident(table_name), quote_ident(idx.target or "")
                 ))
             end
         end
@@ -617,7 +665,7 @@ function _M.exportTableData(keyspace, table_name, format, limit, include_ddl)
         return nil, col_err or "Failed to fetch columns"
     end
 
-    local result = execute(string.format("SELECT * FROM %s.%s LIMIT %d", keyspace, table_name, limit))
+    local result = execute(string.format("SELECT * FROM %s.%s LIMIT %d", quote_ident(keyspace), quote_ident(table_name), limit))
     if not result then
         return nil, "Failed to fetch table data"
     end
