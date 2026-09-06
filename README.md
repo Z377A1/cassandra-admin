@@ -6,14 +6,20 @@ A lightweight, web-based admin interface for Apache Cassandra, powered by [Alpin
 
 ## Features
 
-- **Schema Management** — Sidebar displaying all keyspaces, tables, and materialized views with search-friendly tree navigation.
+- **Apache Cassandra 5.0 & AI-Ready**:
+  - **Vector Search (ANN)** — Native support for `vector<float, n>` column types, Approximate Nearest Neighbor (ANN) similarity search (`ORDER BY col ANN OF [...] LIMIT k`), with support for Cosine Similarity, Euclidean Distance (L2), and Dot Product metrics.
+  - **Storage-Attached Indexing (SAI)** — Full awareness and inspection of `StorageAttachedIndex` custom indexes, with column badges and dedicated index details modal.
+  - **Interactive "Find Similar"** — 1-click vector search directly from any table row to find nearest neighbors in vector space.
+  - **Dynamic Data Masking (DDM)** — Visual badges and DDL export support for masked columns (`mask_inner`, `mask_default`, `mask_null`, etc.).
+  - **Virtual Tables** — Browse Cassandra 5 virtual tables and system metrics (`system_views`, `system_virtual_schema`) with protected read-only safeguards.
+- **Schema Management** — Sidebar displaying all keyspaces, tables, and materialized views with search-friendly tree navigation and virtual entity indicators.
 - **Data Viewer** — Browse table and view data with customizable page sizes (50, 100, 200 rows).
 - **Cursor-Based Pagination** — Fast and efficient cursor pagination using Cassandra's native paging states, eliminating offset overhead.
-- **Column Metadata & Key Badges** — Visual indicators showing data types for each column, with distinct badges distinguishing partition keys and clustering keys.
-- **Formatted CQL Output** — `cqlsh`-like formatting for complex data types including collections (lists, sets, maps), tuples, User-Defined Types (UDTs), blobs, timestamps, decimals, inet, and UUIDs/TimeUUIDs.
-- **Data Export** — Export table data as **CQL** (`INSERT INTO` statements), **CSV**, or **JSON** with configurable row limits and optional DDL (`CREATE TABLE`) statements.
+- **Column Metadata & Key Badges** — Visual indicators showing data types for each column, partition keys, clustering keys, vector dimensions, SAI indexes, and data masks.
+- **Formatted CQL Output** — `cqlsh`-like formatting for complex data types including vectors (`[0.1, 0.2, 0.3]`), collections (lists, sets, maps), tuples, User-Defined Types (UDTs), blobs, timestamps, decimals, inet, smallint, tinyint, date, time, duration, and UUIDs/TimeUUIDs.
+- **Data Export** — Export table data as **CQL** (`INSERT INTO` statements with valid vector syntax), **CSV**, or **JSON** with configurable row limits and complete DDL (`CREATE TABLE` and `CREATE CUSTOM INDEX ... USING 'StorageAttachedIndex'`).
 - **Quick Operations** — Truncate or drop tables and views, and drop keyspaces directly from the UI with modal confirmation.
-- **Safeguards** — Built-in protection prevents accidental modification or deletion of system keyspaces (`system`, `system_auth`, `system_distributed`, `system_schema`, `system_traces`).
+- **Safeguards** — Built-in protection prevents accidental modification or deletion of system and virtual keyspaces (`system`, `system_auth`, `system_distributed`, `system_schema`, `system_traces`, `system_views`, `system_virtual_schema`).
 - **Deep Linking** — Direct URL routing (`/table/{keyspace}/{table}` and `/view/{keyspace}/{view}`) with browser history support (back/forward navigation).
 - **Flexible Configuration** — Configure via environment variables or a `settings.cfg` configuration file.
 - **Dark Mode** — Built-in dark and light theme toggle with automatic system preference detection and `localStorage` persistence.
@@ -105,6 +111,7 @@ Alternatively, you can provide configuration via a `settings.cfg` Lua file. When
 | `/api/keyspace/:keyspace/drop` | `POST` | Drops the specified keyspace |
 | `/api/table/:keyspace/:table/export` | `POST` | Exports table data (`format`, `limit`, `include_ddl`) |
 | `/api/view/:keyspace/:table/export` | `POST` | Exports materialized view data (`format`, `limit`) |
+| `/api/table/:keyspace/:table/vector_search` | `POST` / `GET` | Executes ANN vector search (`vector_column`, `query_vector`, `metric`, `limit`) |
 
 ## Tech Stack
 
