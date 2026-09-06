@@ -64,6 +64,25 @@ local function dropKeyspaceHandler(req, res)
     return res.json({ success = true, message = "Keyspace dropped" })
 end 
 
+local function vectorSearchHandler(req, res)
+    local keyspace = req.params.keyspace
+    local table_name = req.params.table
+    local vector_column = (req.body and (req.body.vector_column or req.body.column)) or req.query.vector_column or req.query.column
+    local query_vector = (req.body and (req.body.query_vector or req.body.vector)) or req.query.query_vector or req.query.vector
+    local limit = (req.body and req.body.limit) or req.query.limit
+    local metric = (req.body and req.body.metric) or req.query.metric
+
+    if not vector_column or not query_vector then
+        return res.status(400).json({ error = "Missing column or vector parameter" })
+    end
+
+    local data, err = db.vectorSearch(keyspace, table_name, vector_column, query_vector, limit, metric)
+    if not data then
+        return res.status(500).json({ error = "Vector search failed: " .. tostring(err) })
+    end
+    return res.json(data)
+end 
+
 local function mainHandler(req, res)
     local entity_type = req.params.entity_type
     res.render("main.html")
@@ -80,6 +99,8 @@ app.post("/api/table/:keyspace/:table/truncate", truncateTableHandler)
 app.post("/api/:entity/:keyspace/:table/drop", dropEntityHandler)
 app.post("/api/table/:keyspace/:table/export", exportTableHandler)
 app.post("/api/view/:keyspace/:table/export", exportTableHandler)
+app.post("/api/table/:keyspace/:table/vector_search", vectorSearchHandler)
+app.get("/api/table/:keyspace/:table/vector_search", vectorSearchHandler)
 app.post("/api/keyspace/:keyspace/drop", dropKeyspaceHandler)
 app.get("/settings", function(req, res)
     res.render("settings.html", { config = config, inspect = require("inspect") })

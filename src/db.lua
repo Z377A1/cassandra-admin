@@ -6,7 +6,10 @@ local utils = require("utils")
 
 local _M = {}
 
-local system_keyspaces = {"system", "system_auth", "system_distributed", "system_schema", "system_traces"}
+local system_keyspaces = {
+    "system", "system_auth", "system_distributed", "system_schema", "system_traces",
+    "system_views", "system_virtual_schema"
+}
 
 local function handle_error(err)
     local error_msg = string.format("Database error: %s", tostring(err))
@@ -84,19 +87,11 @@ function _M.getSchema()
     ---@cast keyspaces CassandraKeyspaceRow[]
 
     local tables_query = "SELECT * FROM system_schema.tables;"
-    local tables = peer:execute(tables_query)
-    if not tables then
-        handle_error("Failed to fetch tables")
-        return nil
-    end
+    local tables = peer:execute(tables_query) or {}
     ---@cast tables CassandraTableRow[]
 
     local views_query = "SELECT * FROM system_schema.views;"
-    local views = peer:execute(views_query)
-    if not views then
-        handle_error("Failed to fetch views")
-        return nil
-    end
+    local views = peer:execute(views_query) or {}
     ---@cast views CassandraViewRow[]
 
     local keyspace_entities = {}
@@ -113,16 +108,48 @@ function _M.getSchema()
         table.insert(keyspace_entities[view.keyspace_name], { name = view.view_name, type = "view", comment = view.comment })
     end
 
+    -- Query virtual keyspaces and tables (Cassandra 4.x / 5.0)
+    pcall(function()
+        local vks_res = peer:execute("SELECT keyspace_name FROM system_virtual_schema.keyspaces;")
+        if vks_res and #vks_res > 0 then
+            for _, vks in ipairs(vks_res) do
+                table.insert(keyspaces, vks)
+            end
+        end
+        local vtbl_res = peer:execute("SELECT * FROM system_virtual_schema.tables;")
+        if vtbl_res and #vtbl_res > 0 then
+            for _, vtbl in ipairs(vtbl_res) do
+                if not keyspace_entities[vtbl.keyspace_name] then
+                    keyspace_entities[vtbl.keyspace_name] = {}
+                end
+                table.insert(keyspace_entities[vtbl.keyspace_name], {
+                    name = vtbl.table_name,
+                    type = "table",
+                    is_virtual = true,
+                    comment = vtbl.comment
+                })
+            end
+        end
+    end)
+
     local schema = {}
+    local seen_keyspaces = {}
     for _, ks in ipairs(keyspaces) do
-        local entities = keyspace_entities[ks.keyspace_name] or {}
-        table.sort(entities, function(a, b)
-            return a.name < b.name
-        end)
-        table.insert(schema, {
-            keyspace = ks.keyspace_name,
-            entities = entities
-        })
+        if not seen_keyspaces[ks.keyspace_name] then
+            seen_keyspaces[ks.keyspace_name] = true
+            local entities = keyspace_entities[ks.keyspace_name] or {}
+            table.sort(entities, function(a, b)
+                return a.name < b.name
+            end)
+            local is_virtual = (ks.keyspace_name == "system_views" or ks.keyspace_name == "system_virtual_schema")
+            local is_system = utils.table_contains(system_keyspaces, ks.keyspace_name)
+            table.insert(schema, {
+                keyspace = ks.keyspace_name,
+                entities = entities,
+                is_virtual = is_virtual,
+                is_system = is_system
+            })
+        end
     end
 
     table.sort(schema, function(a, b)
@@ -140,12 +167,91 @@ local function getTableColumns(keyspace, table_name)
     ]], keyspace, table_name)
 
     local result = execute(query)
+    if not result or #result == 0 then
+        -- Fallback to virtual schema columns (Cassandra 4/5)
+        local vquery = string.format([[
+            SELECT column_name, type, kind, clustering_order, position
+            FROM system_virtual_schema.columns 
+            WHERE keyspace_name = '%s' AND table_name = '%s'
+        ]], keyspace, table_name)
+        result = execute(vquery)
+    end
     if not result then
         return nil, "Failed to fetch columns"
     end
 
+    -- Check for Dynamic Data Masking (DDM in Cassandra 5.0)
+    local masks_by_col = {}
+    pcall(function()
+        local mask_query = string.format([[
+            SELECT column_name, function_name, function_argument_values 
+            FROM system_schema.column_masks 
+            WHERE keyspace_name = '%s' AND table_name = '%s'
+        ]], keyspace, table_name)
+        local mask_res = execute(mask_query)
+        if mask_res and #mask_res > 0 then
+            for _, m in ipairs(mask_res) do
+                masks_by_col[m.column_name] = {
+                    function_name = m.function_name,
+                    argument_values = m.function_argument_values
+                }
+            end
+        end
+    end)
+
+    -- Detect vector columns and masks
+    for _, col in ipairs(result) do
+        if col.type then
+            local dim = col.type:match("^vector<[^,]+,%s*(%d+)>")
+            if dim then
+                col.is_vector = true
+                col.dimension = tonumber(dim)
+            end
+        end
+        if masks_by_col[col.column_name] then
+            col.is_masked = true
+            col.mask_function = masks_by_col[col.column_name].function_name
+            col.mask_args = masks_by_col[col.column_name].argument_values
+        end
+    end
+
     local columns = formatting.get_sorted_columns(result)
     return columns
+end
+
+local function getTableIndexes(keyspace, table_name)
+    local indexes = {}
+    pcall(function()
+        local query = string.format([[
+            SELECT index_name, kind, options 
+            FROM system_schema.indexes 
+            WHERE keyspace_name = '%s' AND table_name = '%s'
+        ]], keyspace, table_name)
+        local result = execute(query)
+        if result and #result > 0 then
+            for _, idx in ipairs(result) do
+                local is_sai = false
+                local target = nil
+                local sim_func = nil
+                if idx.options and type(idx.options) == "table" then
+                    target = idx.options.target
+                    if idx.options.class_name and idx.options.class_name:find("StorageAttachedIndex") then
+                        is_sai = true
+                    end
+                    sim_func = idx.options.similarity_function
+                end
+                table.insert(indexes, {
+                    index_name = idx.index_name,
+                    kind = idx.kind,
+                    target = target,
+                    is_sai = is_sai,
+                    similarity_function = sim_func,
+                    options = idx.options
+                })
+            end
+        end
+    end)
+    return indexes
 end
 
 function _M.getTableData(keyspace, table_name, page_size, paging_state_encoded)
@@ -163,6 +269,44 @@ function _M.getTableData(keyspace, table_name, page_size, paging_state_encoded)
     end
     
     local columns = getTableColumns(keyspace, table_name)
+    local indexes = getTableIndexes(keyspace, table_name)
+
+    -- Attach index info to columns
+    local vector_columns = {}
+    local has_vector = false
+    local has_sai = false
+    if columns then
+        for _, col in ipairs(columns) do
+            if indexes then
+                for _, idx in ipairs(indexes) do
+                    if idx.target == col.column_name then
+                        col.has_index = true
+                        col.index_name = idx.index_name
+                        col.is_sai = idx.is_sai
+                        col.similarity_function = idx.similarity_function
+                        if col.is_vector then
+                            col.is_vector_index = true
+                        end
+                    end
+                end
+            end
+            if col.is_vector then
+                has_vector = true
+                table.insert(vector_columns, {
+                    name = col.column_name,
+                    column_name = col.column_name,
+                    type = col.type,
+                    dimension = col.dimension,
+                    has_index = col.has_index or false,
+                    is_sai = col.is_sai or false,
+                    similarity_function = col.similarity_function or "cosine"
+                })
+            end
+            if col.is_sai then
+                has_sai = true
+            end
+        end
+    end
 
     local query = string.format("SELECT * FROM %s.%s", keyspace, table_name)
     local result = execute(query, nil, query_options)
@@ -186,9 +330,100 @@ function _M.getTableData(keyspace, table_name, page_size, paging_state_encoded)
         table = table_name,
         rows = formatted_rows,
         columns = columns,
+        indexes = indexes,
+        has_vector = has_vector,
+        has_sai = has_sai,
+        vector_columns = vector_columns,
+        is_virtual = (keyspace == "system_views" or keyspace == "system_virtual_schema"),
         has_more_pages = has_more_pages,
         paging_state = next_paging_state,
         page_size = page_size
+    }
+end
+
+function _M.vectorSearch(keyspace, table_name, vector_column, query_vector, limit, metric)
+    limit = utils.coerce_positive_integer(limit, 10)
+    if limit > 200 then limit = 200 end
+
+    metric = metric or "cosine"
+    local allowed_metrics = {
+        cosine = "similarity_cosine",
+        euclidean = "similarity_euclidean",
+        dot_product = "similarity_dot_product"
+    }
+    local sim_fn = allowed_metrics[metric] or "similarity_cosine"
+
+    -- Ensure query_vector is formatted as a CQL vector literal "[v1, v2, ...]"
+    local vec_str
+    if type(query_vector) == "table" then
+        local parts = {}
+        for _, v in ipairs(query_vector) do
+            table.insert(parts, tostring(v))
+        end
+        vec_str = "[" .. table.concat(parts, ", ") .. "]"
+    elseif type(query_vector) == "string" then
+        vec_str = query_vector:gsub("^%s+", ""):gsub("%s+$", "")
+        if not vec_str:find("^%[") then
+            vec_str = "[" .. vec_str .. "]"
+        end
+    else
+        return nil, "Invalid query vector"
+    end
+
+    local columns, col_err = getTableColumns(keyspace, table_name)
+    if not columns then
+        return nil, col_err or "Failed to fetch columns"
+    end
+
+    local col_names = {}
+    for _, c in ipairs(columns) do
+        table.insert(col_names, c.column_name)
+    end
+    local select_cols = table.concat(col_names, ", ")
+    local query = string.format(
+        "SELECT %s, %s(%s, %s) AS similarity_score FROM %s.%s ORDER BY %s ANN OF %s LIMIT %d",
+        select_cols,
+        sim_fn,
+        vector_column,
+        vec_str,
+        keyspace,
+        table_name,
+        vector_column,
+        vec_str,
+        limit
+    )
+
+    local result = execute(query)
+    if not result then
+        return nil, "Vector search query failed"
+    end
+
+    local formatted_rows = formatting.format_rows(result)
+
+    -- Return search columns including similarity_score
+    local search_columns = {}
+    for _, c in ipairs(columns) do
+        table.insert(search_columns, c)
+    end
+    table.insert(search_columns, {
+        column_name = "similarity_score",
+        kind = "regular",
+        type = "float",
+        clustering_order = "none",
+        position = -1,
+        is_score = true
+    })
+
+    return {
+        keyspace = keyspace,
+        table = table_name,
+        rows = formatted_rows,
+        columns = search_columns,
+        vector_column = vector_column,
+        query_vector = vec_str,
+        metric = metric,
+        limit = limit,
+        is_vector_search = true
     }
 end
 
@@ -254,7 +489,15 @@ function _M.getTableDDL(keyspace, table_name)
     local clustering_keys = {}
     
     for _, col in ipairs(columns) do
-        table.insert(col_defs, string.format("    %s %s", col.column_name, col.type))
+        local col_def = string.format("    %s %s", col.column_name, col.type)
+        if col.is_masked and col.mask_function then
+            local args_str = ""
+            if col.mask_args and #col.mask_args > 0 then
+                args_str = table.concat(col.mask_args, ", ")
+            end
+            col_def = col_def .. string.format(" MASKED WITH %s(%s)", col.mask_function, args_str)
+        end
+        table.insert(col_defs, col_def)
         if col.kind == "partition_key" then
             table.insert(partition_keys, col.column_name)
         elseif col.kind == "clustering" then
@@ -333,6 +576,33 @@ function _M.getTableDDL(keyspace, table_name)
     end
     
     table.insert(cql, ";")
+
+    local indexes = getTableIndexes(keyspace, table_name)
+    if indexes and #indexes > 0 then
+        for _, idx in ipairs(indexes) do
+            table.insert(cql, "")
+            if idx.is_sai then
+                local opt_parts = {}
+                if idx.similarity_function then
+                    table.insert(opt_parts, string.format("'similarity_function': '%s'", idx.similarity_function))
+                end
+                local opts_clause = ""
+                if #opt_parts > 0 then
+                    opts_clause = " WITH OPTIONS = {" .. table.concat(opt_parts, ", ") .. "}"
+                end
+                table.insert(cql, string.format(
+                    "CREATE CUSTOM INDEX IF NOT EXISTS %s ON %s.%s (%s) USING 'StorageAttachedIndex'%s;",
+                    idx.index_name, keyspace, table_name, idx.target or "", opts_clause
+                ))
+            else
+                table.insert(cql, string.format(
+                    "CREATE INDEX IF NOT EXISTS %s ON %s.%s (%s);",
+                    idx.index_name, keyspace, table_name, idx.target or ""
+                ))
+            end
+        end
+    end
+
     return table.concat(cql, "\n")
 end
 

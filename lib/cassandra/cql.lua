@@ -69,6 +69,11 @@ local cql_types = {
   varint    = 0x0E,
   timeuuid  = 0x0F,
   inet      = 0x10,
+  date      = 0x11,
+  time      = 0x12,
+  smallint  = 0x13,
+  tinyint   = 0x14,
+  duration  = 0x15,
   list      = 0x20,
   map       = 0x21,
   set       = 0x22,
@@ -788,7 +793,9 @@ do
 
   function Buffer:read_options()
     local cql_t, cql_t_val = self:read_short()
-    if cql_t == cql_types.set or cql_t == cql_types.list then
+    if cql_t == cql_types.custom then
+      cql_t_val = self:read_string()
+    elseif cql_t == cql_types.set or cql_t == cql_types.list then
       cql_t_val = self:read_options()
     elseif cql_t == cql_types.map then
       cql_t_val = {self:read_options(), self:read_options()}
@@ -875,11 +882,64 @@ do
     self:write(marsh_cql_value(val, self.version))
   end
 
+  local function unmarsh_custom(buffer, cql_t_val)
+    if type(cql_t_val) == 'string' and cql_t_val:find('VectorType') then
+      local vec = {}
+      while buffer.pos <= buffer.len do
+        insert(vec, unmarsh_float(buffer))
+      end
+      return vec
+    end
+    return unmarsh_raw(buffer)
+  end
+
+  local function unmarsh_smallint(buffer)
+    local val = buffer:read_short()
+    if val >= 0x8000 then
+      return val - 0x10000
+    end
+    return val
+  end
+
+  local function unmarsh_tinyint(buffer)
+    local val = buffer:read_byte()
+    if val >= 0x80 then
+      return val - 0x100
+    end
+    return val
+  end
+
+  local function unmarsh_date(buffer)
+    local b1, b2, b3, b4 = byte(buffer:read(4), 1, 4)
+    local raw = ((b1 * 0x100 + b2) * 0x100 + b3) * 0x100 + b4
+    local days_since_epoch = raw - 0x80000000
+    local epoch_seconds = days_since_epoch * 86400
+    local ok, res = pcall(os.date, "!%Y-%m-%d", epoch_seconds)
+    if ok and res then
+      return res
+    end
+    return tostring(days_since_epoch)
+  end
+
+  local function unmarsh_time(buffer)
+    local nanos = unmarsh_bigint(buffer)
+    local total_secs = floor(nanos / 1000000000)
+    local rem_nanos = nanos % 1000000000
+    local hours = floor(total_secs / 3600)
+    local mins = floor((total_secs % 3600) / 60)
+    local secs = total_secs % 60
+    return fmt("%02d:%02d:%02d.%09d", hours, mins, secs, rem_nanos)
+  end
+
+  local function unmarsh_duration(buffer)
+    return unmarsh_raw(buffer)
+  end
+
   -- CQL Unmarshalling
   -- @section cql_unmarshalling
 
   local cql_unmarshallers = {
-    -- custom             = 0x00,
+    [cql_types.custom]    = unmarsh_custom,
     [cql_types.ascii]     = unmarsh_raw,
     [cql_types.bigint]    = unmarsh_bigint,
     [cql_types.blob]      = unmarsh_raw,
@@ -891,6 +951,11 @@ do
     [cql_types.inet]      = unmarsh_inet,
     [cql_types.int]       = unmarsh_int,
     [cql_types.text]      = unmarsh_raw,
+    [cql_types.date]      = unmarsh_date,
+    [cql_types.time]      = unmarsh_time,
+    [cql_types.smallint]  = unmarsh_smallint,
+    [cql_types.tinyint]   = unmarsh_tinyint,
+    [cql_types.duration]  = unmarsh_duration,
     [cql_types.list]      = unmarsh_set,
     [cql_types.map]       = unmarsh_map,
     [cql_types.set]       = unmarsh_set,

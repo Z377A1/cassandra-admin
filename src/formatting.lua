@@ -18,12 +18,32 @@ local cql_types = {
   varint    = 0x0E,
   timeuuid  = 0x0F,
   inet      = 0x10,
+  date      = 0x11,
+  time      = 0x12,
+  smallint  = 0x13,
+  tinyint   = 0x14,
+  duration  = 0x15,
   list      = 0x20,
   map       = 0x21,
   set       = 0x22,
   udt       = 0x30,
   tuple     = 0x31,
 }
+
+local function format_vector(vec)
+    if type(vec) ~= "table" then
+        return tostring(vec)
+    end
+    local parts = {}
+    for _, v in ipairs(vec) do
+        if type(v) == "number" then
+            table.insert(parts, string.format("%.7g", v))
+        else
+            table.insert(parts, tostring(v))
+        end
+    end
+    return "[" .. table.concat(parts, ", ") .. "]"
+end
 
 
 local function format_list(list_data, type_value)
@@ -101,15 +121,22 @@ function _M.format(value, type_info)
         return tostring(value)
     end
     
-    local cql_type = type_info.__cql_type
-    
-    if cql_type == cql_types.blob then
+    if cql_type == cql_types.custom then
+        if type(value) == "table" then
+            return format_vector(value)
+        end
+        return tostring(value)
+    elseif cql_type == cql_types.blob then
         return _M.blob_to_hex(value)
     elseif cql_type == cql_types.uuid or cql_type == cql_types.timeuuid then
         return tostring(value)
     elseif cql_type == cql_types.varchar or cql_type == cql_types.ascii or cql_type == cql_types.text then
         return tostring(value)
     elseif cql_type == cql_types.inet then
+        return tostring(value)
+    elseif cql_type == cql_types.date or cql_type == cql_types.time or cql_type == cql_types.duration then
+        return tostring(value)
+    elseif cql_type == cql_types.smallint or cql_type == cql_types.tinyint then
         return tostring(value)
     elseif cql_type == cql_types.map then
         return format_map(value, type_info.__cql_type_value)
@@ -118,6 +145,9 @@ function _M.format(value, type_info)
     elseif cql_type == cql_types.list then
         return format_list(value, type_info.__cql_type_value)
     else
+        if type(value) == "table" and #value > 0 then
+            return format_vector(value)
+        end
         return tostring(value)
     end
 end
@@ -129,6 +159,9 @@ function _M.format_cql_value(value, type_info)
     
     if not type_info then
         -- No type info, attempt to format safely
+        if type(value) == "table" and #value > 0 then
+            return format_vector(value)
+        end
         if type(value) == "string" then
             return "'" .. value:gsub("'", "''") .. "'"
         end
@@ -137,6 +170,14 @@ function _M.format_cql_value(value, type_info)
     
     local cql_type = type_info.__cql_type
     
+    -- Vector (custom type with table value) - no quotes
+    if cql_type == cql_types.custom then
+        if type(value) == "table" then
+            return format_vector(value)
+        end
+        return "'" .. tostring(value):gsub("'", "''") .. "'"
+    end
+
     -- Numeric types - no quotes
     if cql_type == cql_types.int or 
        cql_type == cql_types.bigint or 
@@ -144,7 +185,9 @@ function _M.format_cql_value(value, type_info)
        cql_type == cql_types.varint or
        cql_type == cql_types.float or
        cql_type == cql_types.double or
-       cql_type == cql_types.decimal then
+       cql_type == cql_types.decimal or
+       cql_type == cql_types.smallint or
+       cql_type == cql_types.tinyint then
         return tostring(value)
     end
     
@@ -170,8 +213,11 @@ function _M.format_cql_value(value, type_info)
         return "'" .. tostring(value):gsub("'", "''") .. "'"
     end
     
-    -- Timestamp - with quotes
-    if cql_type == cql_types.timestamp then
+    -- Timestamp, Date, Time, Duration - with quotes
+    if cql_type == cql_types.timestamp or
+       cql_type == cql_types.date or
+       cql_type == cql_types.time or
+       cql_type == cql_types.duration then
         return "'" .. tostring(value) .. "'"
     end
     
@@ -268,7 +314,17 @@ function _M.get_sorted_columns(col_rows)
             kind = row.kind,
             position = row.position,
             type = row.type,
-            clustering_order = row.clustering_order
+            clustering_order = row.clustering_order,
+            is_vector = row.is_vector,
+            dimension = row.dimension,
+            is_masked = row.is_masked,
+            mask_function = row.mask_function,
+            mask_args = row.mask_args,
+            has_index = row.has_index,
+            index_name = row.index_name,
+            is_sai = row.is_sai,
+            is_vector_index = row.is_vector_index,
+            similarity_function = row.similarity_function,
         })
     end
     
